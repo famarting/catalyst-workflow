@@ -77,20 +77,14 @@ func main() {
 
 	os.Setenv("DAPR_CLIENT_TIMEOUT_SECONDS", "10")
 
-	address := os.Getenv("DAPR_GRPC_ENDPOINT")
-
 	start := time.Now()
 	var daprClient client.Client
 	var err error
-	if os.Getenv("ONEBOXV2_ENV") == "true" {
-		daprClient, err = newDaprClient(address, os.Getenv("DAPR_API_TOKEN"))
-	} else {
-		daprClient, err = client.NewClientWithAddressContext(ctx, address)
-	}
+	daprClient, err = client.NewClient()
 	if err != nil {
-		panic(fmt.Errorf("error creating connection to '%s': %w", address, err))
+		panic(fmt.Errorf("error creating connection: %w", err))
 	}
-	fmt.Println("Time taken to connect to catalyst: " + time.Since(start).String())
+	fmt.Println("Time taken to connect to dapr: " + time.Since(start).String())
 	catalyst_workflow.SetDaprClient(daprClient)
 	defer daprClient.Close()
 
@@ -153,7 +147,21 @@ func main() {
 		}
 		fmt.Println("workflow worker successfully shutdown")
 	}()
+	// --------
 
+	wfClient, err := workflow.NewClient(workflow.WithDaprClient(daprClient))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	wfID, err := wfClient.ScheduleNewWorkflow(ctx, "ParallelWorkflow")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("workflow started " + wfID)
+
+	// ----------
 	<-ctx.Done()
 	fmt.Println("bye")
 

@@ -5,7 +5,10 @@ import (
 	"crypto/tls"
 	"fmt"
 	"os"
+	"strconv"
+	"time"
 
+	"github.com/dapr/go-sdk/client"
 	"github.com/dapr/go-sdk/workflow"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -13,8 +16,15 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var daprClient client.Client
+
+func SetDaprClient(c client.Client) {
+	daprClient = c
+}
+
 type MyInput struct {
-	Quantities []int
+	ActivityName string
+	Quantities   []int
 }
 
 type MyActivityResult struct {
@@ -33,13 +43,21 @@ func TestWorkflow(ctx *workflow.WorkflowContext) (any, error) {
 		return nil, err
 	}
 
+	input.ActivityName = "first"
+
 	var output MyActivityResult
-	if err := ctx.CallActivity(TestActivity, workflow.ActivityInput(input)).Await(&output); err != nil {
-		return nil, err
+	err := ctx.CallActivity(TestActivity, workflow.ActivityInput(input)).Await(&output)
+	retryNum := 0
+	for err != nil {
+		// infinite retry
+		input.ActivityName = "first" + strconv.Itoa(retryNum)
+		err = ctx.CallActivity(TestActivity, workflow.ActivityInput(input)).Await(&output)
+		retryNum++
 	}
 
 	if err := ctx.CallActivity(TestActivity, workflow.ActivityInput(MyInput{
-		Quantities: append(input.Quantities, output.Result),
+		ActivityName: "second",
+		Quantities:   append(input.Quantities, output.Result),
 	})).Await(&output); err != nil {
 		return nil, err
 	}
@@ -51,11 +69,11 @@ func TestWorkflow(ctx *workflow.WorkflowContext) (any, error) {
 }
 
 func TestActivity(ctx workflow.ActivityContext) (any, error) {
-	fmt.Println("invoking activity ")
 	var input MyInput
 	if err := ctx.GetInput(&input); err != nil {
 		return MyActivityResult{}, err
 	}
+	fmt.Println("invoking activity " + input.ActivityName)
 
 	// if rand.Intn(100) <= 15 {
 	// 	return MyActivityResult{}, errors.New("random unexpected error triggered")
@@ -66,6 +84,19 @@ func TestActivity(ctx workflow.ActivityContext) (any, error) {
 		r += q
 	}
 
+	ictx, cancel := context.WithTimeout(ctx.Context(), 3*time.Second)
+	defer cancel()
+	out, err := daprClient.InvokeMethod(ictx, "target", "hello", "GET")
+	if err != nil {
+		fmt.Println("hello call failed " + err.Error())
+		return nil, err
+	}
+	if out != nil {
+		fmt.Println("hello response " + string(out))
+	} else {
+		fmt.Println("hello call successfull")
+	}
+
 	return MyActivityResult{
 		Result: r,
 	}, nil
@@ -73,7 +104,7 @@ func TestActivity(ctx workflow.ActivityContext) (any, error) {
 
 func GetGRPCOPTS() (string, []grpc.DialOption) {
 	port := 443
-	hostname := os.Getenv("DAPR_HOST")
+	hostname := os.Getenv("DAPR_GRPC_ENDPOINT")
 	// assume TLS by default
 	daprClientOpts := []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(new(tls.Config)))}
 
